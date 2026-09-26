@@ -1,0 +1,13 @@
+<service>
+  <id>KepwareMonitoring</id>
+  <name>Kepware Monitoring Dashboard</name>
+  <description>Local read-only Kepware Windows service monitor, dashboard, MSSQL logger, and STOPPED alert worker.</description>
+  <executable>__PYTHON_EXE__</executable>
+  <arguments>-m uvicorn app.main:app --host 127.0.0.1 --port 8000</arguments>
+  <workingdirectory>__PROJECT_DIR__</workingdirectory>
+  <startmode>Automatic</startmode>
+  <stoptimeout>15sec</stoptimeout>
+  <onfailure action="restart" delay="10 sec" />
+  <onfailure action="restart" delay="20 sec" />
+  <onfailure action="restart" delay="30 sec" />
+</service>
