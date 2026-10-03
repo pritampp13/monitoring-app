@@ -41,6 +41,11 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 app.include_router(router)
 
 
+def asset_version() -> str:
+    """Changes whenever app.js/style.css change, so browsers never mix new HTML with cached old assets."""
+    return str(int(max((ROOT / "static" / name).stat().st_mtime for name in ("app.js", "style.css"))))
+
+
 @app.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
-    return templates.TemplateResponse(request, "index.html", {"interval": get_settings().monitor_interval_seconds})
+    return templates.TemplateResponse(request, "index.html", {"interval": get_settings().monitor_interval_seconds, "version": asset_version()})

@@ -39,6 +39,7 @@ class FakeDatabase:
     def record(self, observations): pass
     def last_known_statuses(self): return {}
     def history(self, service_name, hours): return list(self.rows.get(service_name, [])) if self.available else None
+    def history_all(self, hours): return {k: list(v) for k, v in self.rows.items()} if self.available else None
 
 
 def install_fake_monitor(tmp_path, database, states=("RUNNING",)):
@@ -110,3 +111,28 @@ def test_in_memory_history_keeps_state_at_window_start(tmp_path):
     monitor._recent["KepwareServerV7"][0]["checked_at"] -= timedelta(hours=3)
     history = monitor.recent_history("KepwareServerV7", 1)
     assert [x["status"] for x in history] == ["RUNNING"]
+
+
+def test_batched_history_maps_each_service_to_its_own_rows(tmp_path):
+    now = datetime.now(timezone.utc).isoformat()
+    rows = {"KepwareServerV7": [{"status": "STOPPED", "startup_type": "Auto", "checked_at": now, "hostname": "h"}],
+            "KepwareServerLoggerV7": [{"status": "RUNNING", "startup_type": "Auto", "checked_at": now, "hostname": "h"}]}
+    install_fake_monitor(tmp_path, FakeDatabase(rows))
+    body = local_client().get("/api/history?hours=24").json()
+    assert body["source"] == "database" and body["available"] is True
+    assert body["services"]["KepwareServerV7"][0]["status"] == "STOPPED"
+    assert body["services"]["KepwareServerLoggerV7"][0]["status"] == "RUNNING"
+    assert local_client().get("/api/history?hours=5").status_code == 400
+
+
+def test_batched_history_falls_back_to_memory(tmp_path):
+    install_fake_monitor(tmp_path, FakeDatabase(available=False), states=("RUNNING", "STOPPED"))
+    body = local_client().get("/api/history?hours=24").json()
+    assert body["source"] == "memory" and body["available"] is False
+    assert [x["status"] for x in body["services"]["KepwareServerV7"]] == ["STOPPED", "RUNNING"]
+
+
+def test_dashboard_assets_are_cache_busted(tmp_path):
+    install_fake_monitor(tmp_path, FakeDatabase())
+    html = local_client().get("/").text
+    assert "/static/app.js?v=" in html and "/static/style.css?v=" in html and 'id="email-switch"' in html

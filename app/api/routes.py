@@ -60,6 +60,19 @@ async def set_email_alerts(toggle: EmailAlertToggle, request: Request):
     return _alert_status(monitor)
 
 
+@router.get("/history")
+async def all_history(request: Request, hours: int = 24):
+    """Every service's history in one request; feeds the dashboard timelines and hover graphs."""
+    if hours not in (1, 6, 24, 168):
+        raise HTTPException(400, "hours must be 1, 6, 24, or 168")
+    monitor = request.app.state.monitor
+    history = await asyncio.to_thread(monitor.database.history_all, hours)
+    if history is None:
+        message = (monitor.database.warning or "Persisted history is unavailable.") + " Showing state changes observed since the monitor started."
+        return {"hours": hours, "services": {s.service_name: monitor.recent_history(s.service_name, hours) for s in monitor.services}, "available": False, "source": "memory", "message": message}
+    return {"hours": hours, "services": history, "available": True, "source": "database", "message": None}
+
+
 @router.get("/services/{service_name}/history")
 async def service_history(service_name: str, request: Request, hours: int = 24):
     if hours not in (1, 6, 24, 168):

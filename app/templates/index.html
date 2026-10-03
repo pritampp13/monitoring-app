@@ -1,5 +1,122 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Kepware Server Monitor</title><link rel="stylesheet" href="/static/style.css"></head>
-<body><main><header><div><p class="eyebrow">LOCAL · READ ONLY</p><h1>Kepware Server Monitor</h1><p id="subline">Connecting to Windows Service Control Manager…</p></div><div class="header-actions"><button id="email-toggle" class="email-toggle" aria-pressed="false" disabled>EMAIL ALERTS: …</button><span id="overall" class="pill pending">CHECKING</span></div></header>
-<section class="metrics"><article><small>Total</small><strong id="total">—</strong></article><article><small>Running</small><strong id="running" class="good">—</strong></article><article><small>Stopped</small><strong id="stopped" class="bad">—</strong></article><article><small>Warning</small><strong id="warning" class="warn">—</strong></article></section>
-<div id="notice" hidden></div><section class="workspace"><section class="panel services-panel"><div class="panel-heading"><div><p class="eyebrow">SERVICE STATUS</p><h2>Live Windows services</h2></div><span id="last">—</span></div><div class="table-head"><span>Service</span><span>State</span><span>Startup</span><span>Last checked</span><span></span></div><div id="services" class="rows"></div></section><aside class="visuals"><section class="panel pie-panel"><div><p class="eyebrow">LIVE DISTRIBUTION</p><h2>Service state</h2></div><div id="pie-chart" class="pie-chart" aria-live="polite"></div><div id="pie-legend" class="pie-legend"></div></section><section class="panel hex-panel"><div><p class="eyebrow">SERVICE HEALTH MAP</p><h2>Hexagon status grid</h2></div><div id="hex-grid" class="hex-grid" aria-live="polite"></div></section></aside></section>
-<section id="history-panel" class="panel history" hidden><div class="panel-heading"><div><p class="eyebrow">HISTORY</p><h2 id="history-title">Service history</h2></div><button id="close-history">Close</button></div><div class="ranges"><button data-hours="1">1 Hour</button><button data-hours="6">6 Hours</button><button data-hours="24" class="selected">24 Hours</button><button data-hours="168">7 Days</button></div><div id="history-summary" class="history-summary"></div><div id="history-chart" class="history-chart" aria-label="Observed service status timeline"></div><p id="history-content">No historical data available.</p></section></main><div id="service-popover" class="popover" role="tooltip" hidden></div><script>window.MONITOR_INTERVAL={{ interval }};</script><script src="/static/app.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kepware Server Monitor</title>
+<link rel="stylesheet" href="/static/style.css?v={{ version }}">
+</head>
+<body>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="bg-scan" aria-hidden="true"></div>
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true"><defs><linearGradient id="bm" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22e4ff"/><stop offset="1" stop-color="#8f7bff"/></linearGradient></defs><path d="M20 2 36 11v18L20 38 4 29V11z" fill="none" stroke="url(#bm)" stroke-width="2"/><path d="M20 9 30 14.5v11L20 31 10 25.5v-11z" fill="url(#bm)" opacity=".18"/><path d="M11 21h5l2.5-6 4 11 2.5-5H29" fill="none" stroke="#22e4ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <div>
+        <p class="eyebrow">Local · Read only · SCM telemetry</p>
+        <h1>KEPWARE <span>SERVICE MONITOR</span></h1>
+      </div>
+    </div>
+    <div class="topbar-center">
+      <div id="sync" class="sync"><span class="sync-dot"></span><span id="sync-text">CONNECTING</span></div>
+      <div class="clock"><span id="clock">--:--:--</span><small id="date">—</small></div>
+    </div>
+    <div class="topbar-actions">
+      <button id="email-switch" class="email-switch" type="button" aria-haspopup="dialog" aria-controls="email-dialog" disabled title="Email alert control (protected)">
+        <span class="es-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m4 7 8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+        <span class="es-text"><span class="es-label">EMAIL ALERTS</span><span id="email-state" class="es-state">· · ·</span></span>
+        <span class="es-track" aria-hidden="true"><span class="es-knob"></span></span>
+        <span class="es-lock" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="1.8"/></svg></span>
+      </button>
+      <div id="overall" class="overall pending" role="status"><span class="overall-dot"></span><span id="overall-text">CHECKING</span></div>
+    </div>
+  </header>
+
+  <section class="kpis" aria-label="Service summary">
+    <article class="panel kpi total"><small>Total services</small><strong id="total">—</strong><span class="sub">Discovered via Windows SCM</span><div class="meter"><i id="m-total"></i></div></article>
+    <article class="panel kpi running"><small>Running</small><strong id="running">—</strong><span class="sub" id="running-sub">Online now</span><div class="meter"><i id="m-running"></i></div></article>
+    <article class="panel kpi stopped"><small>Stopped</small><strong id="stopped">—</strong><span class="sub">Offline now</span><div class="meter"><i id="m-stopped"></i></div></article>
+    <article class="panel kpi attention"><small>Attention</small><strong id="warning">—</strong><span class="sub">Pending / unknown states</span><div class="meter"><i id="m-warning"></i></div></article>
+    <article class="panel kpi avail"><small>Availability</small><strong id="avail">—</strong><span class="sub" id="avail-sub">Observed running time</span><div class="meter"><i id="m-avail"></i></div></article>
+  </section>
+
+  <main class="workspace">
+    <section class="panel services-panel">
+      <div class="panel-head">
+        <div><p class="eyebrow">Service matrix</p><h2>Live Windows services</h2></div>
+        <span id="last" class="panel-meta">—</span>
+      </div>
+      <div class="matrix-head" aria-hidden="true"><span></span><span>Service</span><span>State</span><span id="strip-label">Timeline</span><span class="c-start">Startup</span><span class="c-time">Checked</span><span></span></div>
+      <div id="services" class="matrix"></div>
+      <p class="hint"><span class="hint-key">HOVER</span> a service for its status graph <span class="hint-sep">/</span> <span class="hint-key">CLICK</span> for full history</p>
+    </section>
+    <aside class="side">
+      <section class="panel reactor-panel">
+        <div class="panel-head"><div><p class="eyebrow">Fleet status</p><h2>State distribution</h2></div></div>
+        <div id="reactor" class="reactor" aria-live="polite"></div>
+        <div id="reactor-legend" class="legend"></div>
+      </section>
+      <section class="panel hex-panel">
+        <div class="panel-head"><div><p class="eyebrow">Service health map</p><h2>Hexagon grid</h2></div></div>
+        <div id="hex-grid" class="hex-grid"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span class="sb-item" id="sb-scm"><i></i>SCM</span>
+    <span class="sb-item" id="sb-db"><i></i>MSSQL</span>
+    <span class="sb-item" id="sb-smtp"><i></i>SMTP</span>
+    <span class="sb-item" id="sb-poll">POLL —</span>
+    <span class="sb-item" id="sb-host">HOST —</span>
+    <span id="notice" class="sb-notice" role="status"></span>
+  </footer>
+</div>
+
+<div id="service-popover" class="popover" role="tooltip" hidden></div>
+
+<div id="history-panel" class="modal-backdrop" hidden>
+  <section class="panel modal history" role="dialog" aria-modal="true" aria-labelledby="history-title">
+    <div class="panel-head">
+      <div><p class="eyebrow">Service history</p><h2 id="history-title">History</h2></div>
+      <button id="close-history" class="icon-btn" type="button" aria-label="Close history">✕</button>
+    </div>
+    <div class="ranges"><button type="button" data-hours="1">1 H</button><button type="button" data-hours="6">6 H</button><button type="button" data-hours="24" class="selected">24 H</button><button type="button" data-hours="168">7 D</button></div>
+    <div id="history-summary" class="history-summary"></div>
+    <div id="history-chart" class="history-chart"></div>
+    <div id="history-content" class="history-list">No historical data available.</div>
+  </section>
+</div>
+
+<div id="email-dialog" class="modal-backdrop" hidden>
+  <section class="panel modal email-modal" role="dialog" aria-modal="true" aria-labelledby="em-title">
+    <div class="panel-head">
+      <div><p class="eyebrow">Protected control</p><h2 id="em-title">Email alert kill switch</h2></div>
+      <button id="em-close" class="icon-btn" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="em-status">
+      <div id="em-orb" class="em-orb"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h15A1.5 1.5 0 0 1 21 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m4 7 8 6 8-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></div>
+      <div><strong id="em-state">EMAIL ALERTS</strong><p id="em-desc"></p></div>
+    </div>
+    <dl class="em-facts">
+      <div><dt>SMTP configuration</dt><dd id="em-smtp">—</dd></div>
+      <div><dt>Last alert sent</dt><dd id="em-last">—</dd></div>
+      <div><dt>Suppressed while off</dt><dd id="em-supp">—</dd></div>
+      <div><dt>Switch last changed</dt><dd id="em-changed">—</dd></div>
+    </dl>
+    <p class="em-note"><b>Scope:</b> this switch only controls alert <em>emails</em>. Service monitoring, status detection, MSSQL history, graphs and this dashboard keep running in both positions.</p>
+    <label id="em-ack-row" class="em-ack"><input type="checkbox" id="em-ack"><span>I understand that no email will be sent if a KepwareEX service stops while alerts are OFF.</span></label>
+    <div class="em-actions">
+      <button id="em-cancel" class="ghost-btn" type="button">Cancel</button>
+      <button id="em-hold" class="hold-btn" type="button"><span class="hold-fill"></span><span id="em-hold-text" class="hold-text">Hold to confirm</span></button>
+    </div>
+    <p class="em-help">Press and hold the button for 1.5 seconds to apply. Releasing early cancels.</p>
+  </section>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>window.MONITOR_INTERVAL={{ interval }};</script>
+<script src="/static/app.js?v={{ version }}"></script>
+</body>
+</html>

@@ -84,6 +84,21 @@ class Database:
             self.warning = f"MSSQL alert-state read failed: {type(exc).__name__}. Retrying automatically."
             return {}
 
+    def history_all(self, hours: int) -> dict[str, list[dict]] | None:
+        """All services' history in one query (newest first per service) for dashboard timelines."""
+        if not self.check():
+            return None
+        try:
+            with self._connect() as conn:
+                rows = conn.execute("""SELECT d.service_name,h.status,h.startup_type,h.checked_at,h.hostname FROM dbo.ServiceStatusHistory h JOIN dbo.ServiceDefinitions d ON d.id=h.service_id WHERE h.checked_at >= DATEADD(hour, -?, SYSUTCDATETIME()) ORDER BY d.service_name, h.checked_at DESC""", hours).fetchall()
+            result: dict[str, list[dict]] = {}
+            for r in rows:
+                result.setdefault(r.service_name, []).append({"status": r.status, "startup_type": r.startup_type, "checked_at": r.checked_at.isoformat() + "Z", "hostname": r.hostname})
+            return result
+        except Exception as exc:
+            self.warning = f"MSSQL history query failed: {type(exc).__name__}. Retrying automatically."
+            return None
+
     def history(self, service_name: str, hours: int) -> list[dict] | None:
         if not self.check():
             return None

@@ -103,12 +103,12 @@ app/
   config.py                     pydantic-settings `Settings` + cached `get_settings()`; SMTP missing-variable check
   models.py                     Pydantic models: ServiceObservation (used), HealthResponse (unused)
   database.py                   Optional MSSQL persistence (pyodbc); the only module that touches SQL
-  api/routes.py                 /api/health, /api/services, /api/alerts, /api/alerts/email, /api/services/{name}/history
+  api/routes.py                 /api/health, /api/services, /api/history, /api/alerts, /api/alerts/email, /api/services/{name}/history
   monitoring/monitor.py         ServiceMonitor: polling loop, stable-state transition detection, alert dispatch, in-memory change history
   services/windows_services.py  PowerShell/CIM SCM query, Kepware filter, state normalization
-  templates/index.html          Single Jinja2 page; injects MONITOR_INTERVAL; email toggle + popover container
-  static/app.js                 Vanilla JS (compact style): polling, table, donut, hex grid, history modal, email toggle, hover popover
-  static/style.css              Dark theme, responsive (compact style)
+  templates/index.html          Single Jinja2 page: HUD layout, email control + protected dialog, popover, history modal; cache-busted assets
+  static/app.js                 Vanilla JS: refresh loop, timeline maths, matrix/ring/hex render, hover graph, history modal, hold-to-confirm kill switch
+  static/style.css              Futuristic dark HUD theme; single-viewport layout; responsive fallbacks
 alerts/
   gmail.py                      GmailStoppedAlert: kill-switch gate, message format, STARTTLS send, failure classification
   switch.py                     EmailAlertSwitch: persistent kill switch (data/alert_settings.json)
@@ -145,7 +145,7 @@ Dockerfile.
   - `pytest>=8.3,<9` and `httpx>=0.27,<1` (test only)
 - Versions observed: fastapi 0.139.0, uvicorn 0.49.0, pyodbc 5.3.0. Packages
   are installed into the global interpreter; there is no venv.
-- Email uses only the standard library (`smtplib`, `ssl`, `email`). No email
+- No frontend libraries or web fonts are loaded (Bahnschrift/Cascadia/Consolas system fonts). Email uses only the standard library (`smtplib`, `ssl`, `email`). No email
   dependency was added.
 - OS dependencies:
   - Windows PowerShell (`powershell`) with CIM.
@@ -264,20 +264,52 @@ See §8.
 - `configure_logging()` sets INFO level with one `FileHandler`, writing to
   `<repo>/logs/monitor.log`.
 - Swagger and ReDoc are disabled. `/openapi.json` is still served.
+- `asset_version()` (the newest mtime of `app.js`/`style.css`) is passed to the
+  template as `?v=` on both assets. Browsers therefore never mix new HTML with
+  cached old JS/CSS. That mix is exactly what broke the toggle and the hover
+  graph once, so keep it.
 
 ### 6.8 Frontend (`templates/index.html`, `static/app.js`, `static/style.css`)
-- `app.js` polls `/api/services` every `MONITOR_INTERVAL` s and renders:
-  - the metric tiles
-  - the table
-  - the donut
-  - the hex grid
-  - the email toggle
-- The notice banner joins `monitor_warning`, `database_warning` and
-  `alert_warning`.
+The UI is a futuristic dark HUD design with vanilla JS and no external
+fonts, CDNs or libraries. It works offline on a plant PC.
+
+**Layout.** At >= 960 px wide and >= 620 px tall, the page fits one viewport
+(`body{overflow:hidden}`, `.app` is a `100dvh` grid) and never scrolls. Smaller
+screens fall back to normal page scrolling. The regions are:
+- **Top bar:** brand, the live sync pill ("LIVE · SYNC Ns AGO" / "OFFLINE"), a
+  clock, the email kill-switch control, and the overall chip (ALL HEALTHY /
+  ATTENTION / MONITOR ERROR / BACKEND OFFLINE).
+- **KPI tiles:** Total, Running, Stopped, Attention, and Availability, which is
+  observed running time across all services in the timeline window, computed
+  client-side from real history.
+- **Service matrix:** a row per service with LED, name/ID, state badge, a 24 h
+  timeline strip, startup type, checked time, and a History button. Rows flex
+  to fill the panel; only the matrix scrolls internally if there are many
+  services.
+- **Side column:** the "fleet status" ring (state distribution + ONLINE count +
+  availability) and the hexagon grid. Hexes size to the available height.
+- **Status bar:** SCM / MSSQL (from `/api/health`) / SMTP / poll / host chips,
+  plus a right-aligned notice that joins the monitor, database, alert and
+  history warnings.
+
+**Refresh.** Every `MONITOR_INTERVAL` s, `refresh()` fetches
+`/api/services`, `/api/history?hours=24` and `/api/health` in parallel. Only a
+`/api/services` failure marks the dashboard offline.
+
+**Shared timeline maths.** `toPoints`, `zoomWindow`, `segments` and `stats`:
+- `segments()` merges consecutive same-state rows (snapshots), so strips have
+  no seams.
+- The window is up to 24 h, zoomed to the observed data, and never narrower
+  than 1 h.
+- The live status from `/api/services` extends the last segment to "now".
+- The same functions feed the row strips, the hover graph and the history
+  modal, so they always agree.
+
+**Rules.**
 - All server strings pass through `safe()` before being put into `innerHTML`.
   Keep doing this.
-- The email toggle and the hover popover are described in §8 and §9.
-- State CSS classes are the lower-cased status labels.
+- State CSS classes are `running` / `stopped` / `other` (via `kind()`).
+- Animations respect `prefers-reduced-motion`.
 
 ## 7. Email alert architecture
 
@@ -358,44 +390,58 @@ Sender and recipient addresses are never sent to the browser.
   - an `Origin`, when one is present, equal to the `Host`, which blocks
     cross-site requests.
   If authentication is ever added, this endpoint must require an administrator.
-- **UI.** The header shows `EMAIL ALERTS: ON` (green), `OFF` (red), or `ON`
-  in amber when SMTP is not configured.
-  - Clicking toggles it.
-  - Turning it OFF asks for confirmation and says that monitoring continues.
+- **UI and accidental-change protection.**
+  - The top-bar control shows a mail icon, `EMAIL ALERTS` with `ON`/`OFF`, a
+    sliding switch, and a lock icon. Green means ON, red means OFF, and amber
+    means ON but SMTP is not configured.
+  - **A click never changes anything.** It only opens the "Email alert kill
+    switch" dialog. The dialog shows the state, whether SMTP is configured,
+    the last alert sent, the suppressed count, and when the switch last
+    changed, plus a note on scope.
+  - Turning alerts **OFF** requires ticking an acknowledgement checkbox. The
+    hold button stays disabled until it is ticked.
+  - Both directions require **pressing and holding** the button for
+    `HOLD_MS` = 1.5 s, with a fill animation. Releasing early, moving the
+    pointer off, or pressing Escape cancels. Space or Enter held down also
+    works.
+  - On success the dialog closes, a toast says "EMAIL ALERTS OFF · monitoring
+    continues", and the status bar shows `SMTP MUTED`.
 
 ## 9. Service hover graph
 
-- **Trigger.** Hovering a table row or a hex tile (both carry
-  `data-hover-service`), or keyboard-focusing one, shows `#service-popover`
-  after 140 ms.
-  - The popover is fixed-position, 320 px wide, follows the pointer, and is
-    clamped to the viewport.
+- **Trigger.**
+  - `pointerover` on any `[data-hover-service]` element (matrix rows, hexes)
+    or keyboard focus shows `#service-popover` after 90 ms. The hovered
+    service's row and hex get a `.hovered` highlight.
+  - The popover is 392 px wide, follows the pointer, and is clamped to the
+    viewport.
   - It has `pointer-events: none`, so it never blocks clicks.
-  - It hides on leaving the service, focus out, Escape, window blur, or when
-    the History modal opens.
-- **Data.** It reuses `GET /api/services/{name}/history?hours=24`; there is no
-  new data source.
-  - Responses are cached per service for one polling interval.
-  - A token discards stale responses, and the response's `service_name` must
-    match the hovered service.
-  - On every dashboard refresh, the open popover refetches its own service and
-    redraws, so it keeps tracking the same service across re-renders.
-- **Graph.** A horizontal state timeline (`drawPopover`):
-  - Each history point colours the span until the next point: green RUNNING,
-    red STOPPED, amber other.
-  - The live current status extends the last span to "now".
-  - Gray means no data. Change points are marked with ticks.
-  - The window zooms to the observed data when it covers less than 24 h, with
-    a 1 h minimum.
-  - The stats show % time running in the window, the number of changes, and
-    the last change time.
-  - The footer names the source: "MSSQL history", or "Since monitor start ·
-    MSSQL history unavailable".
+  - It hides when the pointer leaves that service, on focus out, Escape,
+    window blur, or when a modal opens. Touch pointers are ignored; tapping
+    opens History instead.
+- **Data.** No request is made per hover. The popover reads the batched
+  `/api/history` data already loaded by `refresh()`, so it appears instantly.
+  It redraws on every refresh while open and keeps tracking the same service
+  across re-renders.
+- **Graph content** (`drawPopover`):
+  - **Header:** LED, display name, service ID, state badge.
+  - **Stats:** uptime % (coloured by threshold), number of state changes in
+    the window, and "Running for / Stopped for" since the last change (>= when
+    no change has been seen).
+  - **Step chart** (`stepChart`): RUN / OTHER / STOP lanes, coloured segments
+    with gradient areas, dashed transition joins, change dots with tooltips,
+    a pulsing "now" marker, a gray "NO DATA" region before the first
+    observation, and relative ticks.
+  - **Footer:** source ("MSSQL HISTORY" or "LIVE MEMORY · MSSQL UNAVAILABLE"),
+    window length, and last change time.
 - **Why spans are correct.** Rows are written on every change plus periodic
   snapshots, so drawing each status until the next row is accurate.
-- **No MSSQL.** When MSSQL is unavailable, the endpoint returns the monitor's
-  in-memory change points with `source: "memory"` and `available: false`. The
-  graph then still shows genuine data observed since the process started.
+- **No MSSQL.** The history endpoints return the monitor's in-memory change
+  points (`source: "memory"`), so the graphs still show genuine data observed
+  since the process started.
+- **History modal.** Clicking a row's History button or a hex opens a larger
+  step chart for 1 h / 6 h / 24 h / 7 d, with summary chips and the raw
+  observation list. It uses the per-service endpoint.
 
 ## 10. HTTP API
 
@@ -406,6 +452,7 @@ Sender and recipient addresses are never sent to the browser.
 | `GET /api/services` | `{services, counts: {total, running, stopped, warning}, last_checked, monitor_warning, database_warning, alert_warning, email_alerts}` |
 | `GET /api/alerts` | `{enabled, configured, warning, last_sent_at, updated_at, suppressed_count}` |
 | `PUT /api/alerts/email` | Body `{"enabled": bool}` → alert status; 403 for non-local Host / cross-origin; 422 for non-JSON |
+| `GET /api/history?hours=24` | All services in one query: `{hours, services: {name: [records newest first]}, available, source: "database"\|"memory", message}`; same `hours` rule. Feeds the timelines and hover graphs |
 | `GET /api/services/{name}/history?hours=24` | `hours` ∈ {1, 6, 24, 168} else 400. DB OK → `{history, available: true, source: "database", message}`; DB down → `{history: <in-memory changes>, available: false, source: "memory", message}` |
 
 ## 11. Configuration (`.env`, see `.env.example`)
@@ -450,14 +497,14 @@ Then open http://localhost:8000. To check which services SCM reports
 (read-only): `.\scripts\discover_services.ps1`.
 
 ### Tests
-Run `python -m pytest -q`. There are 32 tests, and all passed on 2026-10-03.
+Run `python -m pytest -q`. There are 35 tests, and all passed on 2026-10-03.
 
 | File | Covers |
 |---|---|
 | `test_windows_services.py` | State normalization, the Kepware filter, and that no services yields an empty list |
 | `test_database.py` | Unconfigured DB warning; unavailable host (makes a real pyodbc attempt to `not-a-real-host`) |
 | `test_alerts.py` | Every transition rule in §7, message format, STARTTLS, kill switch OFF/ON and persistence, monitoring continuing while OFF, each SMTP failure class, secret redaction in warnings/logs/status, missing-variable names, `ALERT_RECIPIENT` alias |
-| `test_api.py` | Two tests use the **real lifespan**; the rest install a fake monitor on `app.state` (no lifespan) to test the kill-switch endpoint, its guards, secret-free responses, per-service history mapping, and the in-memory fallback |
+| `test_api.py` | Two tests use the **real lifespan**; the rest install a fake monitor on `app.state` (no lifespan) to test the kill-switch endpoint, its guards, secret-free responses, per-service and batched history mapping, the in-memory fallbacks, and asset cache-busting |
 
 Tests always pass an `EmailAlertSwitch` with a `tmp_path` file and use
 `Settings(_env_file=None, ...)`, so they never read or modify the real switch
@@ -505,8 +552,10 @@ machine, and MSSQL (`KepwareMonitor`) was reachable and holding history.
 
 ## 13. Coding conventions
 
-- **Compact style.** Long single-line expressions and short methods; JS and
-  CSS are hand-written compactly. Match it, and don't reformat whole files.
+- **Python style.** Compact: long single-line expressions and short methods.
+  Match it, and don't reformat whole files.
+- **Frontend style.** `app.js` and `style.css` were rebuilt as readable,
+  sectioned code (CSS uses `:root` tokens). Keep that structure.
 - PEP 604 unions (`str | None`).
 - **Dependency injection for boundaries.** `reader=`, `discoverer=`,
   `alerts=`, `smtp_factory=`, `switch=`. Tests use fakes for these, not
