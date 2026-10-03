@@ -49,11 +49,26 @@ Run tests with `python -m pytest -q`.
 
 ## Gmail STOPPED alerts
 
-The application only sends a mail after a real `RUNNING → STOPPED` transition.
-Repeated STOPPED checks and STOPPED → RUNNING do not send mail. Add the Gmail
-App Password (not a normal Gmail password) to `SMTP_PASSWORD` in `.env`; SMTP
-uses `smtp.gmail.com:587` with STARTTLS. The recipient, sender, and all SMTP
-values remain server-side and are never sent to the dashboard.
+The application only sends a mail after a real `RUNNING → STOPPED` transition
+(a stop observed through `STOP_PENDING` counts once). Repeated STOPPED checks and
+STOPPED → RUNNING do not send mail; a later new stop sends a new mail. The email
+subject is `KepwareEX Service Stopped - <service>` and the body lists the service
+name, status, and the time the stop was observed.
+
+Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `ALERT_FROM`
+and `ALERT_TO` (or `ALERT_RECIPIENT`) in `.env` only. `SMTP_PASSWORD` must be a
+Gmail App Password (not a normal Gmail password); SMTP uses `smtp.gmail.com:587`
+with STARTTLS. The recipient, sender, and all SMTP values remain server-side and
+are never sent to the dashboard. SMTP failures are logged to `logs/monitor.log`
+without credentials and never stop monitoring.
+
+The dashboard header shows **EMAIL ALERTS: ON/OFF**. Clicking it is a kill switch
+for emails only: monitoring, history, graphs and the dashboard keep running. The
+choice is saved in `data/alert_settings.json` (git-ignored); `EMAIL_ALERTS_ENABLED`
+in `.env` sets the initial value.
+
+Hover over a service row or hexagon to see a small status timeline for that
+service from its recorded history.
 
 ## Run continuously as a Windows service
 

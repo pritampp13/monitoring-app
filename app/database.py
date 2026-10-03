@@ -65,7 +65,7 @@ class Database:
             self.warning = f"MSSQL persistence failed: {type(exc).__name__}. Retrying automatically."
 
     def last_known_statuses(self) -> dict[str, str]:
-        """Restore genuine status history so restarts do not create false STOPPED alerts."""
+        """Restore the latest genuine stable status so restarts do not create false or missed STOPPED alerts."""
         if not self.check():
             return {}
         try:
@@ -76,6 +76,7 @@ class Database:
                                ROW_NUMBER() OVER (PARTITION BY h.service_id ORDER BY h.checked_at DESC, h.id DESC) AS rn
                         FROM dbo.ServiceStatusHistory h
                         JOIN dbo.ServiceDefinitions d ON d.id = h.service_id
+                        WHERE h.status IN ('RUNNING', 'STOPPED', 'PAUSED')
                     ) SELECT service_name, status FROM latest WHERE rn = 1
                 """).fetchall()
             return {row.service_name: row.status for row in rows}
